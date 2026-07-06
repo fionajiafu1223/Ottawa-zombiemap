@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>渥太华丧尸爆发 · 实景地图</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #map { position: fixed; inset: 0; background: #0a0e1c; }
+  #agents { position: fixed; inset: 0; pointer-events: none; z-index: 500; }
+
+  /* 夜间氛围滤镜(街道图时) */
+  #map.night .leaflet-tile-pane { filter: invert(1) hue-rotate(190deg) brightness(0.85) contrast(0.92) saturate(0.6); }
+
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 900;
+    padding: 12px 16px; max-width: 250px;
+    background: rgba(8, 12, 26, 0.85); backdrop-filter: blur(8px);
+    border: 1px solid rgba(120, 220, 120, 0.35); border-radius: 12px;
+    color: #d8ffd8; font-size: 13.5px; line-height: 1.75; user-select: none;
+  }
+  #hud h1 { font-size: 16px; color: #ff5a5a; letter-spacing: 2px; margin-bottom: 4px;
+    text-shadow: 0 0 12px rgba(255,60,60,0.6); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.55} }
+  #hud .row span { color: #fff; font-weight: 700; }
+  #hud .zed span { color: #7dff7d; }
+  #hud .surv span { color: #ffd76a; }
+  #hud .dead span { color: #ff8888; }
+  #homeAlert {
+    display: none; margin-top: 6px; padding: 6px 10px;
+    background: rgba(255, 60, 60, 0.2); border: 1px solid rgba(255,90,90,0.6);
+    border-radius: 8px; color: #ffb0b0; font-size: 12.5px;
+    animation: pulse 0.8s ease-in-out infinite;
+  }
+
+  #toolbar {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 900;
+    display: flex; gap: 8px; padding: 8px 10px;
+    background: rgba(8, 12, 26, 0.85); backdrop-filter: blur(8px);
+    border: 1px solid rgba(140, 160, 220, 0.3); border-radius: 14px;
+  }
+  #toolbar button {
+    padding: 9px 13px; border: 1px solid rgba(160, 180, 240, 0.35); border-radius: 10px;
+    background: rgba(40, 50, 90, 0.5); color: #dbe4ff; font-size: 13.5px; cursor: pointer;
+    white-space: nowrap;
+  }
+  #toolbar button.active { background: rgba(90, 200, 120, 0.35); border-color: rgba(120, 255, 160, 0.7); color: #eaffea; }
+  #toolbar button:disabled { opacity: 0.4; }
+
+  #timebar {
+    position: fixed; top: 12px; right: 12px; z-index: 900;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #timebar button, #tileToggle {
+    padding: 8px 12px; border: 1px solid rgba(160, 180, 240, 0.35); border-radius: 10px;
+    background: rgba(8, 12, 26, 0.85); color: #dbe4ff; font-size: 13px; cursor: pointer;
+    backdrop-filter: blur(8px);
+  }
+  #timebar button.active { background: rgba(90, 200, 120, 0.35); color: #eaffea; }
+
+  #banner {
+    position: fixed; inset: 0; z-index: 1200; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(6, 0, 0, 0.6); color: #ff6a6a;
+  }
+  #banner .big { font-size: 44px; font-weight: 800; letter-spacing: 6px; text-shadow: 0 0 30px rgba(255,40,40,0.8); }
+  #banner .sub { margin-top: 10px; font-size: 15px; color: #ffd0d0; letter-spacing: 2px; }
+  #banner button { margin-top: 20px; padding: 10px 26px; font-size: 15px; border-radius: 10px;
+    border: 1px solid rgba(255,120,120,0.6); background: rgba(255,70,70,0.2); color: #ffc0c0; cursor: pointer; }
+  #banner.win { color: #7dff9d; }
+  #banner.win .big { text-shadow: 0 0 30px rgba(60,255,120,0.7); }
+  #banner.win .sub { color: #cfffdd; }
+  #banner.win button { border-color: rgba(120,255,160,0.6); background: rgba(60,200,110,0.2); color: #d0ffdc; }
+
+  #modeTip {
+    position: fixed; bottom: 76px; left: 50%; transform: translateX(-50%); z-index: 900;
+    padding: 5px 14px; border-radius: 999px; font-size: 12.5px;
+    background: rgba(8,12,26,0.8); color: rgba(210, 225, 255, 0.85); display: none;
+  }
+  .leaflet-control-attribution { font-size: 10px; opacity: 0.75; }
+</style>
+</head>
+<body>
+
+<div id="map" class="night"></div>
+<canvas id="agents"></canvas>
+
+<div id="hud">
+  <h1>⚠ 渥太华疫情警报</h1>
+  <div class="row zed">感染丧尸:<span id="zCount">0</span></div>
+  <div class="row surv">幸存市民:<span id="sCount">0</span></div>
+  <div class="row dead">空袭伤亡:<span id="dCount">0</span></div>
+  <div class="row">爆发时长:<span id="tCount">0</span> 小时</div>
+  <div class="row" id="homeRow" style="display:none;">我家距丧尸:<span id="homeDist">-</span> 米</div>
+  <div id="homeAlert">🧟 丧尸正在逼近你家!快加固院子!</div>
+</div>
+
+<div id="timebar">
+  <button id="tileToggle">🛰 切换卫星实景</button>
+  <button data-speed="0">⏸ 暂停</button>
+  <button data-speed="1" class="active">▶ 1x</button>
+  <button data-speed="4">⏩ 4x</button>
+</div>
+
+<div id="toolbar">
+  <button data-mode="pan" class="active">🖐 拖动</button>
+  <button data-mode="home">🏠 标记我家</button>
+  <button data-mode="barricade">🚧 路障 <span id="barLeft">10</span></button>
+  <button data-mode="strike" id="strikeBtn">💥 空袭</button>
+</div>
+<div id="modeTip"></div>
+
+<div id="banner">
+  <div class="big" id="bTitle"></div>
+  <div class="sub" id="bSub"></div>
+  <button id="bRestart">重新开始</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  const rng = (a, b) => a + Math.random() * (b - a);
+
+  // ============ 地理常量 ============
+  const PARLIAMENT = [45.4236, -75.7009];
+  // 市中心活动范围(南岸:Centretown / ByWard / Sandy Hill / Glebe 北缘)
+  const B = { latMin: 45.398, latMax: 45.4315, lngMin: -75.737, lngMax: -75.655 };
+  const M_LAT = 111320;                                    // 每度纬度 ≈ 米
+  const M_LNG = 111320 * Math.cos(45.42 * Math.PI / 180);  // 每度经度 ≈ 米(渥太华纬度)
+  const distM = (a, b) => Math.hypot((a.lat - b.lat) * M_LAT, (a.lng - b.lng) * M_LNG);
+
+  // ============ 地图 ============
+  const map = L.map('map', { center: [45.4205, -75.696], zoom: 15, zoomControl: false });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+  const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap contributors'
+  });
+  const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, attribution: 'Imagery © Esri'
+  });
+  streetLayer.addTo(map);
+  let usingSat = false;
+  document.getElementById('tileToggle').addEventListener('click', () => {
+    usingSat = !usingSat;
+    if (usingSat) {
+      map.removeLayer(streetLayer); satLayer.addTo(map);
+      document.getElementById('map').classList.remove('night');
+      document.getElementById('tileToggle').textContent = '🗺 切换街道地图';
+    } else {
+      map.removeLayer(satLayer); streetLayer.addTo(map);
+      document.getElementById('map').classList.add('night');
+      document.getElementById('tileToggle').textContent = '🛰 切换卫星实景';
+    }
+  });
+
+  // 爆发点标记 + 感染前线圈
+  L.marker(PARLIAMENT, {
+    icon: L.divIcon({ html: '☣️', className: '', iconSize: [30, 30], iconAnchor: [15, 15] })
+  }).addTo(map).bindPopup('<b>国会山 Parliament Hill</b><br>疫情爆发点');
+  const frontRing = L.circle(PARLIAMENT, {
+    radius: 60, color: '#44ff66', weight: 2, fillColor: '#44ff66', fillOpacity: 0.06, dashArray: '8 8'
+  }).addTo(map);
+
+  // ============ 画布叠加层 ============
+  const cv = document.getElementById('agents');
+  const ctx = cv.getContext('2d');
+  function resizeCv() { cv.width = innerWidth * devicePixelRatio; cv.height = innerHeight * devicePixelRatio;
+    cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); }
+  resizeCv();
+  addEventListener('resize', resizeCv);
+
+  // ============ 状态 ============
+  let civilians = [], zombies = [], barricades = [], strikes = [];
+  let home = null, homeMarker = null;
+  let elapsed = 0, simSpeed = 1, dead = 0, over = false;
+  let barricadesLeft = 10, strikeCooldown = 0;
+  let mode = 'pan';
+
+  function randPos() {
+    return { lat: rng(B.latMin, B.latMax), lng: rng(B.lngMin, B.lngMax) };
+  }
+
+  function reset() {
+    civilians = []; zombies = []; dead = 0; elapsed = 0; over = false;
+    barricades.forEach(b => map.removeLayer(b.circle));
+    barricades = []; barricadesLeft = 10;
+    document.getElementById('barLeft').textContent = barricadesLeft;
+    document.getElementById('banner').style.display = 'none';
+    for (let i = 0; i < 320; i++) {
+      const p = randPos();
+      civilians.push({ lat: p.lat, lng: p.lng, dir: rng(0, Math.PI * 2) });
+    }
+    for (let i = 0; i < 6; i++) {
+      zombies.push({
+        lat: PARLIAMENT[0] + rng(-0.0004, 0.0004),
+        lng: PARLIAMENT[1] + rng(-0.0006, 0.0006),
+        dir: rng(0, Math.PI * 2)
+      });
+    }
+  }
+  reset();
+  document.getElementById('bRestart').addEventListener('click', reset);
+
+  // ============ 模式与交互 ============
+  const modeTip = document.getElementById('modeTip');
+  const tips = {
+    pan: '',
+    home: '在地图上点一下你家的位置',
+    barricade: '点击地图放置路障安全圈(丧尸无法进入)',
+    strike: '点击地图呼叫空袭(半径 150 米,注意误伤!)'
+  };
+  document.querySelectorAll('#toolbar button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mode = btn.dataset.mode;
+      document.querySelectorAll('#toolbar button').forEach(b => b.classList.toggle('active', b === btn));
+      modeTip.textContent = tips[mode];
+      modeTip.style.display = tips[mode] ? 'block' : 'none';
+    });
+  });
+  document.querySelectorAll('#timebar button[data-speed]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      simSpeed = +btn.dataset.speed;
+      document.querySelectorAll('#timebar button[data-speed]').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+
+  map.on('click', e => {
+    if (over) return;
+    const p = { lat: e.latlng.lat, lng: e.latlng.lng };
+
+    if (mode === 'home') {
+      home = p;
+      if (homeMarker) map.removeLayer(homeMarker);
+      homeMarker = L.marker([p.lat, p.lng], {
+        icon: L.divIcon({ html: '🏠', className: '', iconSize: [30, 30], iconAnchor: [15, 15] })
+      }).addTo(map).bindPopup('<b>我家</b><br>祝你守住院子');
+      document.getElementById('homeRow').style.display = 'block';
+    }
+
+    if (mode === 'barricade' && barricadesLeft > 0) {
+      const circle = L.circle([p.lat, p.lng], {
+        radius: 80, color: '#ffaa33', weight: 2, fillColor: '#ffaa33', fillOpacity: 0.12
+      }).addTo(map);
+      barricades.push({ lat: p.lat, lng: p.lng, r: 80, circle });
+      barricadesLeft--;
+      document.getElementById('barLeft').textContent = barricadesLeft;
+    }
+
+    if (mode === 'strike' && strikeCooldown <= 0) {
+      strikeCooldown = 6;
+      const R = 150;
+      strikes.push({ lat: p.lat, lng: p.lng, r: R, t: 0 });
+      // 消灭范围内丧尸
+      zombies = zombies.filter(z => distM(z, p) > R);
+      // 误伤范围内市民
+      const before = civilians.length;
+      civilians = civilians.filter(c => distM(c, p) > R * 0.4);
+      dead += before - civilians.length;
+      const flash = L.circle([p.lat, p.lng], { radius: R, color: '#ff4433', weight: 2, fillColor: '#ff6633', fillOpacity: 0.35 }).addTo(map);
+      let op = 0.35;
+      const fade = setInterval(() => {
+        op -= 0.03;
+        if (op <= 0) { map.removeLayer(flash); clearInterval(fade); }
+        else flash.setStyle({ fillOpacity: op, opacity: op * 2.5 });
+      }, 60);
+    }
+  });
+
+  // ============ 模拟 ============
+  const Z_SPEED = 2.6, C_SPEED = 1.8, C_FLEE = 3.6;   // 米/秒
+  const DETECT = 380, FLEE_R = 220, INFECT = 14;      // 米
+
+  function moveAgent(a, speedMS, dt) {
+    a.lat += Math.cos(a.dir) * speedMS * dt / M_LAT;
+    a.lng += Math.sin(a.dir) * speedMS * dt / M_LNG;
+    a.lat = Math.max(B.latMin, Math.min(B.latMax, a.lat));
+    a.lng = Math.max(B.lngMin, Math.min(B.lngMax, a.lng));
+  }
+  function bearing(from, to) {
+    return Math.atan2((to.lng - from.lng) * M_LNG, (to.lat - from.lat) * M_LAT);
+  }
+
+  function step(dt) {
+    elapsed += dt;
+
+    // 丧尸
+    zombies.forEach(z => {
+      let nearest = null, nd = DETECT;
+      civilians.forEach(c => {
+        const d = distM(z, c);
+        if (d < nd) { nd = d; nearest = c; }
+      });
+      if (nearest) z.dir = bearing(z, nearest);
+      else if (Math.random() < 0.02) z.dir += rng(-1, 1);
+      moveAgent(z, Z_SPEED, dt);
+      // 路障阻挡:推出安全圈
+      barricades.forEach(bar => {
+        const d = distM(z, bar);
+        if (d < bar.r) {
+          const ang = bearing(bar, z);
+          z.lat = bar.lat + Math.cos(ang) * (bar.r + 2) / M_LAT;
+          z.lng = bar.lng + Math.sin(ang) * (bar.r + 2) / M_LNG;
+          z.dir = ang;
+        }
+      });
+    });
+
+    // 市民
+    for (let i = civilians.length - 1; i >= 0; i--) {
+      const c = civilians[i];
+      let nz = null, nd = FLEE_R;
+      zombies.forEach(z => {
+        const d = distM(c, z);
+        if (d < nd) { nd = d; nz = z; }
+      });
+      if (nz) {
+        // 逃向最近的路障安全圈;没有就反向跑
+        let refuge = null, rd = 1e9;
+        barricades.forEach(bar => {
+          const d = distM(c, bar);
+          if (d < rd) { rd = d; refuge = bar; }
+        });
+        c.dir = (refuge && rd < 600) ? bearing(c, refuge) : bearing(nz, c);
+        moveAgent(c, C_FLEE, dt);
+      } else {
+        if (Math.random() < 0.03) c.dir += rng(-1.2, 1.2);
+        moveAgent(c, C_SPEED, dt);
+      }
+      if (nz && nd < INFECT) {
+        // 感染:市民变丧尸
+        civilians.splice(i, 1);
+        zombies.push({ lat: c.lat, lng: c.lng, dir: rng(0, Math.PI * 2) });
+      }
+    }
+
+    // 感染前线圈 = 丧尸距爆发点最远距离
+    let maxD = 60;
+    const org = { lat: PARLIAMENT[0], lng: PARLIAMENT[1] };
+    zombies.forEach(z => { const d = distM(z, org); if (d > maxD) maxD = d; });
+    frontRing.setRadius(maxD);
+
+    // 结局判定
+    if (!over && civilians.length === 0) {
+      over = true;
+      showBanner(false, `渥太华在 ${Math.floor(elapsed / 30)} 小时内全城沦陷,${dead} 人死于空袭误伤`);
+    }
+    if (!over && zombies.length === 0) {
+      over = true;
+      showBanner(true, `疫情在 ${Math.floor(elapsed / 30)} 小时内被肃清,幸存 ${civilians.length} 人,空袭误伤 ${dead} 人`);
+    }
+  }
+
+  function showBanner(win, sub) {
+    const b = document.getElementById('banner');
+    b.classList.toggle('win', win);
+    document.getElementById('bTitle').textContent = win ? '疫情肃清' : '城市沦陷';
+    document.getElementById('bSub').textContent = sub;
+    b.style.display = 'flex';
+  }
+
+  // ============ 绘制 ============
+  function draw() {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    const zoom = map.getZoom();
+    const dotR = Math.max(2, (zoom - 12) * 1.4);
+
+    // 市民(黄点)
+    ctx.fillStyle = '#ffd76a';
+    civilians.forEach(c => {
+      const pt = map.latLngToContainerPoint([c.lat, c.lng]);
+      if (pt.x < -20 || pt.y < -20 || pt.x > innerWidth + 20 || pt.y > innerHeight + 20) return;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 丧尸(绿点 + 光晕)
+    zombies.forEach(z => {
+      const pt = map.latLngToContainerPoint([z.lat, z.lng]);
+      if (pt.x < -30 || pt.y < -30 || pt.x > innerWidth + 30 || pt.y > innerHeight + 30) return;
+      const grd = ctx.createRadialGradient(pt.x, pt.y, 1, pt.x, pt.y, dotR * 3);
+      grd.addColorStop(0, 'rgba(90, 255, 110, 0.85)');
+      grd.addColorStop(1, 'rgba(90, 255, 110, 0)');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, dotR * 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#39e35c';
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // ============ HUD ============
+  function updateHUD() {
+    document.getElementById('zCount').textContent = zombies.length;
+    document.getElementById('sCount').textContent = civilians.length;
+    document.getElementById('dCount').textContent = dead;
+    document.getElementById('tCount').textContent = Math.floor(elapsed / 30);
+    const strikeBtn = document.getElementById('strikeBtn');
+    strikeBtn.textContent = strikeCooldown > 0 ? `💥 冷却 ${Math.ceil(strikeCooldown)}s` : '💥 空袭';
+    strikeBtn.disabled = strikeCooldown > 0;
+
+    if (home) {
+      let nd = 1e9;
+      zombies.forEach(z => { const d = distM(z, home); if (d < nd) nd = d; });
+      document.getElementById('homeDist').textContent = zombies.length ? Math.round(nd) : '-';
+      document.getElementById('homeAlert').style.display = (zombies.length && nd < 200) ? 'block' : 'none';
+    }
+  }
+
+  // ============ 主循环 ============
+  let last = performance.now();
+  function tick(now) {
+    requestAnimationFrame(tick);
+    const dtReal = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (strikeCooldown > 0) strikeCooldown -= dtReal;
+    if (!over && simSpeed > 0) {
+      // 固定步长防穿透
+      let acc = dtReal * simSpeed;
+      while (acc > 0) { const s = Math.min(acc, 0.05); step(s); acc -= s; }
+    }
+    draw();
+    updateHUD();
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
