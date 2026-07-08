@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>渥太华丧尸爆发 · 实景地图 + 街景</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #map { position: fixed; inset: 0; background: #0a0e1c; }
+  #agents { position: fixed; inset: 0; pointer-events: none; z-index: 500; }
+  #map.night .leaflet-tile-pane { filter: invert(1) hue-rotate(190deg) brightness(0.85) contrast(0.92) saturate(0.6); }
+
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 900;
+    padding: 12px 16px; max-width: 250px;
+    background: rgba(8, 12, 26, 0.85); backdrop-filter: blur(8px);
+    border: 1px solid rgba(120, 220, 120, 0.35); border-radius: 12px;
+    color: #d8ffd8; font-size: 13.5px; line-height: 1.75; user-select: none;
+  }
+  #hud h1 { font-size: 16px; color: #ff5a5a; letter-spacing: 2px; margin-bottom: 4px;
+    text-shadow: 0 0 12px rgba(255,60,60,0.6); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.55} }
+  #hud .row span { color: #fff; font-weight: 700; }
+  #hud .zed span { color: #7dff7d; }
+  #hud .surv span { color: #ffd76a; }
+  #hud .dead span { color: #ff8888; }
+  #homeAlert {
+    display: none; margin-top: 6px; padding: 6px 10px;
+    background: rgba(255, 60, 60, 0.2); border: 1px solid rgba(255,90,90,0.6);
+    border-radius: 8px; color: #ffb0b0; font-size: 12.5px;
+    animation: pulse 0.8s ease-in-out infinite;
+  }
+
+  #toolbar {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 900;
+    display: flex; gap: 7px; padding: 8px 10px; max-width: 96vw; overflow-x: auto;
+    background: rgba(8, 12, 26, 0.85); backdrop-filter: blur(8px);
+    border: 1px solid rgba(140, 160, 220, 0.3); border-radius: 14px;
+  }
+  #toolbar button {
+    padding: 9px 12px; border: 1px solid rgba(160, 180, 240, 0.35); border-radius: 10px;
+    background: rgba(40, 50, 90, 0.5); color: #dbe4ff; font-size: 13.5px; cursor: pointer;
+    white-space: nowrap; flex: none;
+  }
+  #toolbar button.active { background: rgba(90, 200, 120, 0.35); border-color: rgba(120, 255, 160, 0.7); color: #eaffea; }
+  #toolbar button:disabled { opacity: 0.4; }
+
+  #timebar {
+    position: fixed; top: 12px; right: 12px; z-index: 900;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #timebar button {
+    padding: 8px 12px; border: 1px solid rgba(160, 180, 240, 0.35); border-radius: 10px;
+    background: rgba(8, 12, 26, 0.85); color: #dbe4ff; font-size: 13px; cursor: pointer;
+    backdrop-filter: blur(8px);
+  }
+  #timebar button.active { background: rgba(90, 200, 120, 0.35); color: #eaffea; }
+
+  #banner {
+    position: fixed; inset: 0; z-index: 1200; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(6, 0, 0, 0.6); color: #ff6a6a; text-align: center;
+  }
+  #banner .big { font-size: 44px; font-weight: 800; letter-spacing: 6px; text-shadow: 0 0 30px rgba(255,40,40,0.8); }
+  #banner .sub { margin-top: 10px; font-size: 15px; color: #ffd0d0; letter-spacing: 2px; padding: 0 20px; }
+  #banner button { margin-top: 20px; padding: 10px 26px; font-size: 15px; border-radius: 10px;
+    border: 1px solid rgba(255,120,120,0.6); background: rgba(255,70,70,0.2); color: #ffc0c0; cursor: pointer; }
+  #banner.win { color: #7dff9d; }
+  #banner.win .big { text-shadow: 0 0 30px rgba(60,255,120,0.7); }
+  #banner.win .sub { color: #cfffdd; }
+  #banner.win button { border-color: rgba(120,255,160,0.6); background: rgba(60,200,110,0.2); color: #d0ffdc; }
+
+  #modeTip {
+    position: fixed; bottom: 76px; left: 50%; transform: translateX(-50%); z-index: 900;
+    padding: 5px 14px; border-radius: 999px; font-size: 12.5px;
+    background: rgba(8,12,26,0.8); color: rgba(210, 225, 255, 0.85); display: none;
+    white-space: nowrap;
+  }
+  .leaflet-control-attribution { font-size: 10px; opacity: 0.75; }
+
+  /* ============ 街景面板 ============ */
+  #svPanel {
+    position: fixed; z-index: 1000; display: none;
+    top: 0; right: 0; width: 44%; height: 100%;
+    background: #05070f; border-left: 2px solid rgba(120, 255, 160, 0.4);
+    box-shadow: -8px 0 30px rgba(0,0,0,0.6);
+  }
+  @media (max-width: 820px) {
+    #svPanel { top: auto; bottom: 0; right: 0; width: 100%; height: 48%; border-left: none; border-top: 2px solid rgba(120,255,160,0.4); }
+  }
+  #svPanel iframe { width: 100%; height: 100%; border: 0; }
+  #svHeader {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    background: linear-gradient(180deg, rgba(5,8,18,0.9), rgba(5,8,18,0));
+    color: #d8ffd8; font-size: 13px; pointer-events: none;
+  }
+  #svHeader .count { color: #7dff7d; font-weight: 700; }
+  #svClose {
+    position: absolute; top: 8px; right: 8px; z-index: 4;
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid rgba(255,120,120,0.6); background: rgba(20, 8, 8, 0.85);
+    color: #ffb0b0; font-size: 16px; cursor: pointer;
+  }
+  #svZombies { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+  #svZombies .zwalk {
+    position: absolute; bottom: 6%;
+    font-size: 64px;
+    filter: drop-shadow(0 6px 8px rgba(0,0,0,0.6)) hue-rotate(40deg) saturate(1.4);
+    animation: zcross linear infinite, zsway 0.7s ease-in-out infinite alternate;
+  }
+  @keyframes zcross { from { left: -12%; } to { left: 105%; } }
+  @keyframes zsway {
+    from { transform: rotate(-7deg) translateY(0); }
+    to   { transform: rotate(7deg) translateY(-6px); }
+  }
+  #svEmpty {
+    position: absolute; inset: 0; z-index: 2; pointer-events: none;
+    display: none; align-items: flex-end; justify-content: center; padding-bottom: 12%;
+    color: rgba(200, 255, 210, 0.85); font-size: 14px; letter-spacing: 1px;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+  }
+</style>
+</head>
+<body>
+
+<div id="map" class="night"></div>
+<canvas id="agents"></canvas>
+
+<div id="hud">
+  <h1>⚠ 渥太华疫情警报</h1>
+  <div class="row zed">感染丧尸:<span id="zCount">0</span></div>
+  <div class="row surv">幸存市民:<span id="sCount">0</span></div>
+  <div class="row dead">空袭伤亡:<span id="dCount">0</span></div>
+  <div class="row">爆发时长:<span id="tCount">0</span> 小时</div>
+  <div class="row" id="homeRow" style="display:none;">我家距丧尸:<span id="homeDist">-</span> 米</div>
+  <div id="homeAlert">🧟 丧尸正在逼近你家!快加固院子!</div>
+</div>
+
+<div id="timebar">
+  <button id="tileToggle">🛰 切换卫星实景</button>
+  <button id="frontSV">📍 前线街景</button>
+  <button data-speed="0">⏸ 暂停</button>
+  <button data-speed="1" class="active">▶ 1x</button>
+  <button data-speed="4">⏩ 4x</button>
+</div>
+
+<div id="toolbar">
+  <button data-mode="pan" class="active">🖐 拖动</button>
+  <button data-mode="sv">👁 街景侦察</button>
+  <button data-mode="home">🏠 标记我家</button>
+  <button data-mode="barricade">🚧 路障 <span id="barLeft">10</span></button>
+  <button data-mode="strike" id="strikeBtn">💥 空袭</button>
+</div>
+<div id="modeTip"></div>
+
+<div id="svPanel">
+  <div id="svHeader"><span>👁 街景侦察</span><span>此处 120 米内丧尸:<span class="count" id="svCount">0</span></span></div>
+  <button id="svClose">✕</button>
+  <div id="svZombies"></div>
+  <div id="svEmpty">✅ 这条街暂时安全</div>
+  <iframe id="svFrame" src="" allow="fullscreen" referrerpolicy="no-referrer-when-downgrade"></iframe>
+</div>
+
+<div id="banner">
+  <div class="big" id="bTitle"></div>
+  <div class="sub" id="bSub"></div>
+  <button id="bRestart">重新开始</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  const rng = (a, b) => a + Math.random() * (b - a);
+
+  // ============ 地理常量 ============
+  const PARLIAMENT = [45.4236, -75.7009];
+  const B = { latMin: 45.398, latMax: 45.4315, lngMin: -75.737, lngMax: -75.655 };
+  const M_LAT = 111320;
+  const M_LNG = 111320 * Math.cos(45.42 * Math.PI / 180);
+  const distM = (a, b) => Math.hypot((a.lat - b.lat) * M_LAT, (a.lng - b.lng) * M_LNG);
+
+  // ============ 地图 ============
+  const map = L.map('map', { center: [45.4205, -75.696], zoom: 15, zoomControl: false });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap contributors'
+  });
+  const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, attribution: 'Imagery © Esri'
+  });
+  streetLayer.addTo(map);
+  let usingSat = false;
+  document.getElementById('tileToggle').addEventListener('click', () => {
+    usingSat = !usingSat;
+    if (usingSat) {
+      map.removeLayer(streetLayer); satLayer.addTo(map);
+      document.getElementById('map').classList.remove('night');
+      document.getElementById('tileToggle').textContent = '🗺 切换街道地图';
+    } else {
+      map.removeLayer(satLayer); streetLayer.addTo(map);
+      document.getElementById('map').classList.add('night');
+      document.getElementById('tileToggle').textContent = '🛰 切换卫星实景';
+    }
+  });
+
+  L.marker(PARLIAMENT, {
+    icon: L.divIcon({ html: '☣️', className: '', iconSize: [30, 30], iconAnchor: [15, 15] })
+  }).addTo(map).bindPopup('<b>国会山 Parliament Hill</b><br>疫情爆发点');
+  const frontRing = L.circle(PARLIAMENT, {
+    radius: 60, color: '#44ff66', weight: 2, fillColor: '#44ff66', fillOpacity: 0.06, dashArray: '8 8'
+  }).addTo(map);
+
+  // ============ 画布 ============
+  const cv = document.getElementById('agents');
+  const ctx = cv.getContext('2d');
+  function resizeCv() {
+    cv.width = innerWidth * devicePixelRatio; cv.height = innerHeight * devicePixelRatio;
+    cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  }
+  resizeCv();
+  addEventListener('resize', resizeCv);
+
+  // ============ 丧尸精灵:程序化预渲染 8 帧行走动画 ============
+  const Z_FRAMES = 8, Z_RES = 128;
+  const zombieFrames = [];
+
+  function drawArm(g, x1, y1, x2, y2, sleeve, skin) {
+    g.lineCap = 'round';
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    g.strokeStyle = sleeve; g.lineWidth = 10;
+    g.beginPath(); g.moveTo(x1, y1); g.lineTo(mx, my); g.stroke();
+    g.strokeStyle = skin; g.lineWidth = 8.5;
+    g.beginPath(); g.moveTo(mx, my); g.lineTo(x2, y2); g.stroke();
+    g.fillStyle = skin;
+    g.beginPath(); g.arc(x2 + 3, y2, 6, 0, Math.PI * 2); g.fill();
+  }
+  function drawEyeSocket(g, x, y) {
+    g.fillStyle = '#1c2416';
+    g.beginPath(); g.arc(x, y, 4.6, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ff4433';
+    g.beginPath(); g.arc(x + 1, y, 1.7, 0, Math.PI * 2); g.fill();
+  }
+  function drawZombie(g, ph) {
+    const bob = Math.abs(Math.sin(ph)) * 3;
+    const sway = Math.sin(ph) * 0.08;
+
+    // 影子
+    g.fillStyle = 'rgba(0,0,0,0.35)';
+    g.beginPath(); g.ellipse(64, 118, 26, 7, 0, 0, Math.PI * 2); g.fill();
+
+    // 腿(交替迈步)
+    const lx = 48 + Math.sin(ph) * 9, rx = 78 - Math.sin(ph) * 9;
+    g.lineCap = 'round';
+    g.strokeStyle = '#2b3145'; g.lineWidth = 11;
+    g.beginPath(); g.moveTo(58, 88 - bob); g.lineTo(lx, 114); g.stroke();
+    g.strokeStyle = '#232a3d';
+    g.beginPath(); g.moveTo(70, 88 - bob); g.lineTo(rx, 114); g.stroke();
+    // 鞋
+    g.fillStyle = '#191d2c';
+    g.beginPath(); g.ellipse(lx + 3, 115, 8, 4.5, 0, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(rx + 3, 115, 8, 4.5, 0, 0, Math.PI * 2); g.fill();
+
+    // 上身整体摇晃
+    g.save();
+    g.translate(64, 90 - bob);
+    g.rotate(sway);
+    g.translate(-64, -(90 - bob));
+
+    // 远侧手臂(躯干后)
+    drawArm(g, 66, 66 - bob, 102, 78 - bob + Math.cos(ph) * 5, '#31424f', '#79a55a');
+
+    // 躯干:破烂衬衫(锯齿下摆)
+    g.fillStyle = '#3a4f5e';
+    g.beginPath();
+    g.moveTo(46, 56 - bob);
+    g.quadraticCurveTo(64, 50 - bob, 82, 56 - bob);
+    g.lineTo(84, 84 - bob);
+    g.lineTo(78, 90 - bob); g.lineTo(72, 84 - bob); g.lineTo(66, 91 - bob);
+    g.lineTo(60, 85 - bob); g.lineTo(53, 90 - bob); g.lineTo(46, 84 - bob);
+    g.closePath(); g.fill();
+    // 血渍
+    g.fillStyle = 'rgba(120, 20, 20, 0.75)';
+    g.beginPath(); g.ellipse(70, 72 - bob, 7, 10, 0.5, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(52, 80 - bob, 4, 5, 0, 0, Math.PI * 2); g.fill();
+
+    // 近侧手臂(前伸)
+    drawArm(g, 70, 62 - bob, 108, 64 - bob + Math.sin(ph) * 6, '#3f5666', '#8fbf6a');
+
+    // 头(独立晃动)
+    g.save();
+    g.translate(66, 40 - bob);
+    g.rotate(Math.sin(ph + 1) * 0.12 + 0.08);
+    // 脖子
+    g.fillStyle = '#7fae5f';
+    g.fillRect(-6, 10, 12, 10);
+    // 脸
+    g.fillStyle = '#8fbf6a';
+    g.beginPath(); g.arc(0, 0, 20, 0, Math.PI * 2); g.fill();
+    // 暗部
+    g.fillStyle = 'rgba(60, 100, 50, 0.45)';
+    g.beginPath(); g.arc(-6, 2, 18, Math.PI * 0.4, Math.PI * 1.4); g.fill();
+    // 乱发
+    g.fillStyle = '#26301f';
+    g.beginPath();
+    g.moveTo(-20, -4); g.quadraticCurveTo(-16, -22, 2, -20);
+    g.quadraticCurveTo(18, -22, 19, -6);
+    g.quadraticCurveTo(10, -14, 2, -12);
+    g.quadraticCurveTo(-10, -14, -20, -4);
+    g.closePath(); g.fill();
+    // 眼窝 + 红瞳
+    drawEyeSocket(g, 4, -4);
+    drawEyeSocket(g, 14, -2);
+    // 张开的嘴 + 牙
+    g.fillStyle = '#3b1414';
+    g.beginPath(); g.ellipse(12, 10, 6, 7.5, -0.2, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#e8e4d0';
+    g.fillRect(8.5, 4.5, 3, 3); g.fillRect(13, 5, 3, 3);
+    // 头部伤口
+    g.strokeStyle = '#6d1d1d'; g.lineWidth = 2.2;
+    g.beginPath(); g.moveTo(-14, -8); g.lineTo(-6, -4); g.stroke();
+    g.beginPath(); g.moveTo(-12, -9); g.lineTo(-11, -3); g.stroke();
+    g.restore();
+
+    g.restore();
+  }
+  for (let f = 0; f < Z_FRAMES; f++) {
+    const c = document.createElement('canvas');
+    c.width = c.height = Z_RES;
+    drawZombie(c.getContext('2d'), f / Z_FRAMES * Math.PI * 2);
+    zombieFrames.push(c);
+  }
+
+  // ============ 市民精灵:6 种造型 × 行走/恐慌 × 8 帧 ============
+  const CIV_VARIANTS = [
+    { skin: '#f2c9a0', hair: '#2b2320', shirt: '#d95555', pants: '#33415e' },
+    { skin: '#e0ac7e', hair: '#5a4632', shirt: '#4a7fd9', pants: '#4a4f5a' },
+    { skin: '#f2c9a0', hair: '#b8934a', shirt: '#4aa96c', pants: '#6b4f3a' },
+    { skin: '#c68a5a', hair: '#1c1c1e', shirt: '#b06ad9', pants: '#2f5e50' },
+    { skin: '#e0ac7e', hair: '#808891', shirt: '#e4e8ee', pants: '#33415e' },
+    { skin: '#c68a5a', hair: '#2b2320', shirt: '#e8a33d', pants: '#4a4f5a' },
+  ];
+
+  function drawCivilian(g, ph, V, panic) {
+    const bob = Math.abs(Math.sin(ph)) * (panic ? 4 : 2.5);
+    const stride = panic ? 13 : 8;
+
+    // 影子
+    g.fillStyle = 'rgba(0,0,0,0.32)';
+    g.beginPath(); g.ellipse(64, 118, 22, 6, 0, 0, Math.PI * 2); g.fill();
+
+    // 腿(交替迈步)
+    const lx = 52 + Math.sin(ph) * stride, rx = 76 - Math.sin(ph) * stride;
+    g.lineCap = 'round';
+    g.strokeStyle = V.pants; g.lineWidth = 10;
+    g.beginPath(); g.moveTo(59, 86 - bob); g.lineTo(lx, 114); g.stroke();
+    // 远腿略深
+    g.strokeStyle = shade(V.pants, -18);
+    g.beginPath(); g.moveTo(69, 86 - bob); g.lineTo(rx, 114); g.stroke();
+    // 鞋
+    g.fillStyle = '#23262f';
+    g.beginPath(); g.ellipse(lx + 3, 115, 7, 4, 0, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(rx + 3, 115, 7, 4, 0, 0, Math.PI * 2); g.fill();
+
+    // 远侧手臂(躯干后)
+    if (panic) {
+      civArm(g, 56, 60 - bob, 40 + Math.sin(ph) * 3, 28 - bob, shade(V.shirt, -20), shade(V.skin, -14));
+    } else {
+      civArm(g, 58, 62 - bob, 50 - Math.sin(ph) * 9, 84 - bob, shade(V.shirt, -20), shade(V.skin, -14));
+    }
+
+    // 躯干:整洁上衣
+    g.fillStyle = V.shirt;
+    g.beginPath();
+    g.moveTo(50, 60 - bob);
+    g.quadraticCurveTo(64, 54 - bob, 78, 60 - bob);
+    g.quadraticCurveTo(82, 74 - bob, 79, 88 - bob);
+    g.lineTo(49, 88 - bob);
+    g.quadraticCurveTo(46, 74 - bob, 50, 60 - bob);
+    g.closePath(); g.fill();
+
+    // 近侧手臂
+    if (panic) {
+      civArm(g, 72, 60 - bob, 88 - Math.sin(ph) * 3, 26 - bob, V.shirt, V.skin);
+    } else {
+      civArm(g, 70, 62 - bob, 78 + Math.sin(ph) * 9, 84 - bob, V.shirt, V.skin);
+    }
+
+    // 头(端正)
+    const hx = 64, hy = 38 - bob;
+    g.fillStyle = V.skin;
+    g.beginPath(); g.arc(hx, hy, 17, 0, Math.PI * 2); g.fill();
+    // 整齐头发(覆盖头顶)
+    g.fillStyle = V.hair;
+    g.beginPath();
+    g.arc(hx, hy - 2, 17, Math.PI * 1.02, Math.PI * 1.98);
+    g.quadraticCurveTo(hx + 14, hy - 14, hx - 2, hy - 17);
+    g.closePath(); g.fill();
+    // 耳
+    g.fillStyle = V.skin;
+    g.beginPath(); g.arc(hx - 15, hy + 2, 3.4, 0, Math.PI * 2); g.fill();
+
+    if (panic) {
+      // 恐慌:瞪大的眼 + 张开的嘴
+      g.fillStyle = '#ffffff';
+      g.beginPath(); g.arc(hx + 5, hy - 2, 4.2, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(hx + 13, hy - 1, 4.2, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#1c2030';
+      g.beginPath(); g.arc(hx + 6, hy - 2, 1.9, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(hx + 14, hy - 1, 1.9, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#5e2222';
+      g.beginPath(); g.ellipse(hx + 9, hy + 9, 4.4, 5.6, 0, 0, Math.PI * 2); g.fill();
+    } else {
+      // 平静:小眼睛 + 微笑
+      g.fillStyle = '#1c2030';
+      g.beginPath(); g.arc(hx + 6, hy - 1, 1.9, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(hx + 13, hy, 1.9, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#8a5a3c'; g.lineWidth = 1.8;
+      g.beginPath(); g.arc(hx + 9, hy + 7, 4, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke();
+    }
+  }
+  function civArm(g, x1, y1, x2, y2, sleeve, skin) {
+    g.lineCap = 'round';
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    g.strokeStyle = sleeve; g.lineWidth = 9;
+    g.beginPath(); g.moveTo(x1, y1); g.lineTo(mx, my); g.stroke();
+    g.strokeStyle = skin; g.lineWidth = 7.5;
+    g.beginPath(); g.moveTo(mx, my); g.lineTo(x2, y2); g.stroke();
+    g.fillStyle = skin;
+    g.beginPath(); g.arc(x2, y2, 5, 0, Math.PI * 2); g.fill();
+  }
+  function shade(hex, amt) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.max(0, Math.min(255, (n >> 16) + amt));
+    const gg = Math.max(0, Math.min(255, ((n >> 8) & 255) + amt));
+    const b = Math.max(0, Math.min(255, (n & 255) + amt));
+    return `rgb(${r},${gg},${b})`;
+  }
+  // 预渲染:civFrames[造型][0=行走|1=恐慌][帧]
+  const civFrames = CIV_VARIANTS.map(V => [0, 1].map(panic => {
+    const frames = [];
+    for (let f = 0; f < Z_FRAMES; f++) {
+      const c = document.createElement('canvas');
+      c.width = c.height = Z_RES;
+      drawCivilian(c.getContext('2d'), f / Z_FRAMES * Math.PI * 2, V, panic === 1);
+      frames.push(c);
+    }
+    return frames;
+  }));
+
+  // ============ 状态 ============
+  let civilians = [], zombies = [], barricades = [];
+  let home = null, homeMarker = null;
+  let elapsed = 0, simSpeed = 1, dead = 0, over = false;
+  let barricadesLeft = 10, strikeCooldown = 0;
+  let mode = 'pan';
+
+  function randPos() { return { lat: rng(B.latMin, B.latMax), lng: rng(B.lngMin, B.lngMax) }; }
+  function newZombie(lat, lng) {
+    return { lat, lng, dir: rng(0, Math.PI * 2), ph: rng(0, Z_FRAMES) };
+  }
+
+  function reset() {
+    civilians = []; zombies = []; dead = 0; elapsed = 0; over = false;
+    barricades.forEach(b => map.removeLayer(b.circle));
+    barricades = []; barricadesLeft = 10;
+    document.getElementById('barLeft').textContent = barricadesLeft;
+    document.getElementById('banner').style.display = 'none';
+    for (let i = 0; i < 320; i++) {
+      const p = randPos();
+      civilians.push({
+        lat: p.lat, lng: p.lng, dir: rng(0, Math.PI * 2),
+        v: (Math.random() * CIV_VARIANTS.length) | 0,
+        ph: rng(0, Z_FRAMES), fleeing: false
+      });
+    }
+    for (let i = 0; i < 6; i++) {
+      zombies.push(newZombie(
+        PARLIAMENT[0] + rng(-0.0004, 0.0004),
+        PARLIAMENT[1] + rng(-0.0006, 0.0006)
+      ));
+    }
+  }
+  reset();
+  document.getElementById('bRestart').addEventListener('click', reset);
+
+  // ============ 街景 ============
+  const svPanel = document.getElementById('svPanel');
+  const svFrame = document.getElementById('svFrame');
+  const svZombies = document.getElementById('svZombies');
+  const svEmpty = document.getElementById('svEmpty');
+  const svCountEl = document.getElementById('svCount');
+
+  function bearingDeg(from, to) {
+    return (Math.atan2((to.lng - from.lng) * M_LNG, (to.lat - from.lat) * M_LAT) * 180 / Math.PI + 360) % 360;
+  }
+  function openStreetView(lat, lng) {
+    const here = { lat, lng };
+    let count = 0, nearest = null, nd = 1e9;
+    zombies.forEach(z => {
+      const d = distM(z, here);
+      if (d < 120) count++;
+      if (d < nd) { nd = d; nearest = z; }
+    });
+    const heading = nearest ? bearingDeg(here, nearest)
+      : bearingDeg(here, { lat: PARLIAMENT[0], lng: PARLIAMENT[1] });
+    svFrame.src = `https://maps.google.com/maps?layer=c&cbll=${lat.toFixed(6)},${lng.toFixed(6)}&cbp=12,${heading.toFixed(0)},0,0,0&output=svembed`;
+
+    svZombies.innerHTML = '';
+    const n = Math.min(count, 8);
+    for (let i = 0; i < n; i++) {
+      const sp = document.createElement('span');
+      sp.className = 'zwalk';
+      sp.textContent = '🧟';
+      const dur = rng(9, 18);
+      sp.style.animationDuration = `${dur}s, 0.7s`;
+      sp.style.animationDelay = `${rng(-dur, 0)}s, ${rng(-0.7, 0)}s`;
+      sp.style.fontSize = `${rng(40, 90)}px`;
+      sp.style.bottom = `${rng(3, 14)}%`;
+      svZombies.appendChild(sp);
+    }
+    svCountEl.textContent = count;
+    svEmpty.style.display = count === 0 ? 'flex' : 'none';
+    svPanel.style.display = 'block';
+  }
+  document.getElementById('svClose').addEventListener('click', () => {
+    svPanel.style.display = 'none';
+    svFrame.src = '';
+  });
+  document.getElementById('frontSV').addEventListener('click', () => {
+    if (!zombies.length) return;
+    const org = { lat: PARLIAMENT[0], lng: PARLIAMENT[1] };
+    let far = zombies[0], fd = 0;
+    zombies.forEach(z => { const d = distM(z, org); if (d > fd) { fd = d; far = z; } });
+    map.panTo([far.lat, far.lng]);
+    openStreetView(far.lat, far.lng);
+  });
+
+  // ============ 模式与交互 ============
+  const modeTip = document.getElementById('modeTip');
+  const tips = {
+    pan: '',
+    sv: '点击地图任意位置,查看该处街景与丧尸',
+    home: '在地图上点一下你家的位置',
+    barricade: '点击地图放置路障安全圈(丧尸无法进入)',
+    strike: '点击地图呼叫空袭(半径 150 米,注意误伤!)'
+  };
+  document.querySelectorAll('#toolbar button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mode = btn.dataset.mode;
+      document.querySelectorAll('#toolbar button').forEach(b => b.classList.toggle('active', b === btn));
+      modeTip.textContent = tips[mode];
+      modeTip.style.display = tips[mode] ? 'block' : 'none';
+    });
+  });
+  document.querySelectorAll('#timebar button[data-speed]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      simSpeed = +btn.dataset.speed;
+      document.querySelectorAll('#timebar button[data-speed]').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+
+  map.on('click', e => {
+    if (over) return;
+    const p = { lat: e.latlng.lat, lng: e.latlng.lng };
+
+    if (mode === 'sv') openStreetView(p.lat, p.lng);
+
+    if (mode === 'home') {
+      home = p;
+      if (homeMarker) map.removeLayer(homeMarker);
+      homeMarker = L.marker([p.lat, p.lng], {
+        icon: L.divIcon({ html: '🏠', className: '', iconSize: [30, 30], iconAnchor: [15, 15] })
+      }).addTo(map).bindPopup('<b>我家</b><br>祝你守住院子');
+      document.getElementById('homeRow').style.display = 'block';
+    }
+
+    if (mode === 'barricade' && barricadesLeft > 0) {
+      const circle = L.circle([p.lat, p.lng], {
+        radius: 80, color: '#ffaa33', weight: 2, fillColor: '#ffaa33', fillOpacity: 0.12
+      }).addTo(map);
+      barricades.push({ lat: p.lat, lng: p.lng, r: 80, circle });
+      barricadesLeft--;
+      document.getElementById('barLeft').textContent = barricadesLeft;
+    }
+
+    if (mode === 'strike' && strikeCooldown <= 0) {
+      strikeCooldown = 6;
+      const R = 150;
+      zombies = zombies.filter(z => distM(z, p) > R);
+      const before = civilians.length;
+      civilians = civilians.filter(c => distM(c, p) > R * 0.4);
+      dead += before - civilians.length;
+      const flash = L.circle([p.lat, p.lng], { radius: R, color: '#ff4433', weight: 2, fillColor: '#ff6633', fillOpacity: 0.35 }).addTo(map);
+      let op = 0.35;
+      const fade = setInterval(() => {
+        op -= 0.03;
+        if (op <= 0) { map.removeLayer(flash); clearInterval(fade); }
+        else flash.setStyle({ fillOpacity: op, opacity: op * 2.5 });
+      }, 60);
+    }
+  });
+
+  // ============ 模拟 ============
+  const Z_SPEED = 2.6, C_SPEED = 1.8, C_FLEE = 3.6;
+  const DETECT = 380, FLEE_R = 220, INFECT = 14;
+
+  function moveAgent(a, speedMS, dt) {
+    a.lat += Math.cos(a.dir) * speedMS * dt / M_LAT;
+    a.lng += Math.sin(a.dir) * speedMS * dt / M_LNG;
+    a.lat = Math.max(B.latMin, Math.min(B.latMax, a.lat));
+    a.lng = Math.max(B.lngMin, Math.min(B.lngMax, a.lng));
+  }
+  function bearing(from, to) {
+    return Math.atan2((to.lng - from.lng) * M_LNG, (to.lat - from.lat) * M_LAT);
+  }
+
+  function step(dt) {
+    elapsed += dt;
+
+    zombies.forEach(z => {
+      let nearest = null, nd = DETECT;
+      civilians.forEach(c => {
+        const d = distM(z, c);
+        if (d < nd) { nd = d; nearest = c; }
+      });
+      if (nearest) z.dir = bearing(z, nearest);
+      else if (Math.random() < 0.02) z.dir += rng(-1, 1);
+      moveAgent(z, Z_SPEED, dt);
+      barricades.forEach(bar => {
+        const d = distM(z, bar);
+        if (d < bar.r) {
+          const ang = bearing(bar, z);
+          z.lat = bar.lat + Math.cos(ang) * (bar.r + 2) / M_LAT;
+          z.lng = bar.lng + Math.sin(ang) * (bar.r + 2) / M_LNG;
+          z.dir = ang;
+        }
+      });
+    });
+
+    for (let i = civilians.length - 1; i >= 0; i--) {
+      const c = civilians[i];
+      let nz = null, nd = FLEE_R;
+      zombies.forEach(z => {
+        const d = distM(c, z);
+        if (d < nd) { nd = d; nz = z; }
+      });
+      c.fleeing = !!nz;
+      if (nz) {
+        let refuge = null, rd = 1e9;
+        barricades.forEach(bar => {
+          const d = distM(c, bar);
+          if (d < rd) { rd = d; refuge = bar; }
+        });
+        c.dir = (refuge && rd < 600) ? bearing(c, refuge) : bearing(nz, c);
+        moveAgent(c, C_FLEE, dt);
+      } else {
+        if (Math.random() < 0.03) c.dir += rng(-1.2, 1.2);
+        moveAgent(c, C_SPEED, dt);
+      }
+      if (nz && nd < INFECT) {
+        civilians.splice(i, 1);
+        zombies.push(newZombie(c.lat, c.lng));
+      }
+    }
+
+    let maxD = 60;
+    const org = { lat: PARLIAMENT[0], lng: PARLIAMENT[1] };
+    zombies.forEach(z => { const d = distM(z, org); if (d > maxD) maxD = d; });
+    frontRing.setRadius(maxD);
+
+    if (!over && civilians.length === 0) {
+      over = true;
+      showBanner(false, `渥太华在 ${Math.floor(elapsed / 30)} 小时内全城沦陷,${dead} 人死于空袭误伤`);
+    }
+    if (!over && zombies.length === 0) {
+      over = true;
+      showBanner(true, `疫情在 ${Math.floor(elapsed / 30)} 小时内被肃清,幸存 ${civilians.length} 人,空袭误伤 ${dead} 人`);
+    }
+  }
+
+  function showBanner(win, sub) {
+    const b = document.getElementById('banner');
+    b.classList.toggle('win', win);
+    document.getElementById('bTitle').textContent = win ? '疫情肃清' : '城市沦陷';
+    document.getElementById('bSub').textContent = sub;
+    b.style.display = 'flex';
+  }
+
+  // ============ 绘制 ============
+  function draw() {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    const zoom = map.getZoom();
+    const dotR = Math.max(2, (zoom - 12) * 1.4);
+    const useSprite = zoom >= 14;
+    // 精灵尺寸随缩放:zoom16 时约 34px
+    const spriteSize = Math.min(72, Math.max(16, 34 * Math.pow(2, zoom - 16)));
+
+    // 市民
+    const civSize = spriteSize * 0.88;
+    civilians.forEach(c => {
+      const pt = map.latLngToContainerPoint([c.lat, c.lng]);
+      const m = useSprite ? civSize : 20;
+      if (pt.x < -m || pt.y < -m || pt.x > innerWidth + m || pt.y > innerHeight + m) return;
+
+      if (!useSprite) {
+        // 远景:黄色光点
+        ctx.fillStyle = '#ffd76a';
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, dotR, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+      }
+
+      // 近景:行人精灵(恐慌时举手狂奔、帧率加快)
+      const rate = c.fleeing ? 12 : 6;
+      const fi = Math.floor((elapsed * rate + c.ph)) % Z_FRAMES;
+      const facingLeft = Math.sin(c.dir) < 0;
+      ctx.save();
+      ctx.translate(pt.x, pt.y);
+      if (facingLeft) ctx.scale(-1, 1);
+      ctx.drawImage(civFrames[c.v][c.fleeing ? 1 : 0][fi], -civSize / 2, -civSize * 0.92, civSize, civSize);
+      ctx.restore();
+    });
+
+    // 丧尸
+    zombies.forEach(z => {
+      const pt = map.latLngToContainerPoint([z.lat, z.lng]);
+      const m = spriteSize;
+      if (pt.x < -m || pt.y < -m || pt.x > innerWidth + m || pt.y > innerHeight + m) return;
+
+      if (!useSprite) {
+        // 远景:光点模式
+        const grd = ctx.createRadialGradient(pt.x, pt.y, 1, pt.x, pt.y, dotR * 3);
+        grd.addColorStop(0, 'rgba(90, 255, 110, 0.85)');
+        grd.addColorStop(1, 'rgba(90, 255, 110, 0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, dotR * 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#39e35c';
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, dotR, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+      }
+
+      // 近景:行走精灵
+      // 脚下感染光晕
+      const glowR = spriteSize * 0.5;
+      const grd = ctx.createRadialGradient(pt.x, pt.y, 1, pt.x, pt.y, glowR);
+      grd.addColorStop(0, 'rgba(90, 255, 110, 0.35)');
+      grd.addColorStop(1, 'rgba(90, 255, 110, 0)');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, glowR, 0, Math.PI * 2);
+      ctx.fill();
+
+      const fi = Math.floor((elapsed * 7 + z.ph)) % Z_FRAMES;
+      const facingLeft = Math.sin(z.dir) < 0;
+      ctx.save();
+      ctx.translate(pt.x, pt.y);
+      if (facingLeft) ctx.scale(-1, 1);
+      // 精灵锚点:脚底对准坐标点
+      ctx.drawImage(zombieFrames[fi], -spriteSize / 2, -spriteSize * 0.92, spriteSize, spriteSize);
+      ctx.restore();
+    });
+  }
+
+  // ============ HUD ============
+  function updateHUD() {
+    document.getElementById('zCount').textContent = zombies.length;
+    document.getElementById('sCount').textContent = civilians.length;
+    document.getElementById('dCount').textContent = dead;
+    document.getElementById('tCount').textContent = Math.floor(elapsed / 30);
+    const strikeBtn = document.getElementById('strikeBtn');
+    strikeBtn.textContent = strikeCooldown > 0 ? `💥 冷却 ${Math.ceil(strikeCooldown)}s` : '💥 空袭';
+    strikeBtn.disabled = strikeCooldown > 0;
+
+    if (home) {
+      let nd = 1e9;
+      zombies.forEach(z => { const d = distM(z, home); if (d < nd) nd = d; });
+      document.getElementById('homeDist').textContent = zombies.length ? Math.round(nd) : '-';
+      document.getElementById('homeAlert').style.display = (zombies.length && nd < 200) ? 'block' : 'none';
+    }
+  }
+
+  // ============ 主循环 ============
+  let last = performance.now();
+  function tick(now) {
+    requestAnimationFrame(tick);
+    const dtReal = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (strikeCooldown > 0) strikeCooldown -= dtReal;
+    if (!over && simSpeed > 0) {
+      let acc = dtReal * simSpeed;
+      while (acc > 0) { const s = Math.min(acc, 0.05); step(s); acc -= s; }
+    }
+    draw();
+    updateHUD();
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
